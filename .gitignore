@@ -1,0 +1,6 @@
+# cache de arquivos oficiais do n8n e relatórios gerados pelos scripts
+work/
+
+node_modules/
+.DS_Store
+Thumbs.db

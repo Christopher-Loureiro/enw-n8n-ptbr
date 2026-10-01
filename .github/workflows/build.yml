@@ -1,0 +1,134 @@
+name: Build imagem n8n PT-BR
+
+# Somente execução manual, para termos controle de cada imagem publicada.
+on:
+  workflow_dispatch:
+    inputs:
+      N8N_VERSION:
+        description: 'Versão oficial do n8n (ex.: 2.1.1)'
+        required: true
+        default: '2.1.1'
+      TRANSLATION_VERSION:
+        description: 'Sufixo da tradução (ex.: v1, v2, test, test2) -> tag <N8N_VERSION>-<sufixo>'
+        required: true
+        default: 'test'
+      N8N_IMAGE_DIGEST:
+        description: 'Digest da imagem oficial (vazio = n8n-version.json se a versão bater, senão o digest atual do Docker Hub)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: build-${{ inputs.N8N_VERSION }}-${{ inputs.TRANSLATION_VERSION }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout do nosso repositório
+        uses: actions/checkout@v4
+
+      - name: Validar entradas e resolver versões fixadas
+        id: meta
+        env:
+          N8N_VERSION: ${{ inputs.N8N_VERSION }}
+          TRANSLATION_VERSION: ${{ inputs.TRANSLATION_VERSION }}
+          INPUT_DIGEST: ${{ inputs.N8N_IMAGE_DIGEST }}
+        run: |
+          set -euo pipefail
+          [[ "$N8N_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "N8N_VERSION inválida: $N8N_VERSION"; exit 1; }
+          [[ "$TRANSLATION_VERSION" =~ ^[a-z0-9][a-z0-9.-]*$ ]] || { echo "TRANSLATION_VERSION inválida: $TRANSLATION_VERSION"; exit 1; }
+
+          # Commit exato da tag oficial (tag anotada ou leve)
+          COMMIT=$(git ls-remote https://github.com/n8n-io/n8n.git "refs/tags/n8n@${N8N_VERSION}^{}" | cut -f1)
+          [ -n "$COMMIT" ] || COMMIT=$(git ls-remote https://github.com/n8n-io/n8n.git "refs/tags/n8n@${N8N_VERSION}" | cut -f1)
+          [ -n "$COMMIT" ] || { echo "Tag n8n@${N8N_VERSION} não encontrada"; exit 1; }
+
+          # Digest da imagem oficial
+          PINNED_VERSION=$(jq -r .version n8n-version.json)
+          if [ -n "$INPUT_DIGEST" ]; then DIGEST="$INPUT_DIGEST"
+          elif [ "$PINNED_VERSION" = "$N8N_VERSION" ]; then DIGEST=$(jq -r .imageDigest n8n-version.json)
+          else DIGEST=$(docker buildx imagetools inspect "n8nio/n8n:${N8N_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)
+          fi
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Digest inválido: $DIGEST"; exit 1; }
+
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER}/enw-n8n-ptbr"
+          TAG="${N8N_VERSION}-${TRANSLATION_VERSION}"
+          NODE_VERSION=$(jq -r .nodeVersion n8n-version.json)
+
+          {
+            echo "commit=$COMMIT"
+            echo "digest=$DIGEST"
+            echo "image=$IMAGE"
+            echo "tag=$TAG"
+            echo "node=$NODE_VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "n8n ${N8N_VERSION} @ ${COMMIT}"
+          echo "base n8nio/n8n:${N8N_VERSION}@${DIGEST}"
+          echo "imagem ${IMAGE}:${TAG}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.meta.outputs.node }}
+
+      - name: Validar locale/pt.json contra o en.json oficial
+        run: node scripts/check-locale.mjs --version "${{ inputs.N8N_VERSION }}"
+
+      - name: Login no GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Garantir que a tag ainda não existe (nunca sobrescrever imagens)
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}" > /dev/null 2>&1; then
+            echo "A tag ${{ steps.meta.outputs.tag }} já existe. Use outro TRANSLATION_VERSION."
+            exit 1
+          fi
+
+      - name: Liberar disco e adicionar swap (build do frontend usa muita memória)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo fallocate -l 10G /swapfile2 && sudo chmod 600 /swapfile2 && sudo mkswap /swapfile2 && sudo swapon /swapfile2
+          free -h; df -h /
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build e push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          build-args: |
+            N8N_VERSION=${{ inputs.N8N_VERSION }}
+            N8N_COMMIT=${{ steps.meta.outputs.commit }}
+            N8N_IMAGE_DIGEST=${{ steps.meta.outputs.digest }}
+            NODE_VERSION=${{ steps.meta.outputs.node }}
+            TRANSLATION_VERSION=${{ inputs.TRANSLATION_VERSION }}
+
+      - name: Resumo
+        run: |
+          {
+            echo "## Imagem publicada"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Imagem | \`${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}\` |"
+            echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
+            echo "| n8n | ${{ inputs.N8N_VERSION }} (commit \`${{ steps.meta.outputs.commit }}\`) |"
+            echo "| Base | \`n8nio/n8n:${{ inputs.N8N_VERSION }}@${{ steps.meta.outputs.digest }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
