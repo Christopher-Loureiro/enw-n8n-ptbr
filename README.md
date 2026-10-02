@@ -7,7 +7,7 @@ n8n oficial X.Y.Z
       +
 locale/pt.json          ← nossa única fonte de verdade
       +
-patch mínimo (App.vue)  ← carrega o pt.json em produção
+patch mínimo (@n8n/i18n) ← registra o pt.json em produção
       +
 build só do frontend
       =
@@ -22,7 +22,7 @@ Ele não é lugar para alterações funcionais do n8n (veja [Features do n8n](#f
 ```
 enw-n8n-ptbr/
 ├── locale/pt.json                    ← ÚNICO arquivo de tradução editado por nós
-├── patches/load-pt-locale.patch      ← patch de ~10 linhas no App.vue
+├── patches/load-pt-locale.patch      ← patch de 3 linhas em @n8n/i18n/src/index.ts
 ├── scripts/
 │   ├── check-locale.mjs              ← valida pt.json contra o inglês oficial (não altera nada)
 │   ├── sync-locale.mjs               ← ajuda a atualizar para uma versão nova do n8n
@@ -36,7 +36,10 @@ enw-n8n-ptbr/
 ## Como funciona
 
 - **Locale:** `pt`. A documentação de i18n do n8n diz que variantes regionais como `pt-BR` não são suportadas, então seguimos o ISO 639-1. O conteúdo é Português do Brasil.
-- **Por que existe um patch:** no n8n 2.1.1, o `App.vue` só chama `setLanguage()`. Nenhum código de produção carrega um JSON de idioma além do inglês, porque o carregamento só existe no HMR de desenvolvimento. O patch importa `locales/pt.json` e chama `loadLanguage()`, uma função que o próprio `@n8n/i18n` já exporta.
+- **Por que existe um patch:** no n8n 2.1.1, o `App.vue` só chama `setLanguage()`. Nenhum código de produção carrega um JSON de idioma além do inglês, porque o carregamento só existe no HMR de desenvolvimento.
+  - Além disso, vários rótulos são resolvidos no topo dos módulos (descritores de Data tables, MCP, Chat), antes de qualquer troca de idioma.
+  - O patch importa `locales/pt.json`, registra o arquivo na criação da instância do vue-i18n e usa `pt` como locale inicial.
+  - O `App.vue` oficial continua chamando `setLanguage(N8N_DEFAULT_LOCALE)` sem alteração.
 - **Design-system:** os componentes do `@n8n/design-system` têm 80 strings próprias, em `lang/en.ts`. Essas chaves também ficam no nosso `pt.json`. Durante o build, `generate-design-locale.mjs` gera `lang/pt.ts` a partir dele. O `pt.ts` é **artefato de build**, nunca editado.
 - **Fallback:** chaves ausentes no `pt.json` aparecem em inglês (`fallbackLocale: 'en'` do vue-i18n), sem quebrar a interface.
 - **Imagem:** `FROM n8nio/n8n:X.Y.Z@sha256:…` mais a substituição de `n8n-editor-ui/dist`. Backend, nodes e runners ficam idênticos ao oficial.
@@ -192,7 +195,7 @@ node scripts/sync-locale.mjs --to X.Y.Z --merge work/sync-X.Y.Z/missing-translat
 node scripts/check-locale.mjs --version X.Y.Z --strict
 ```
 
-5. Confira se o patch ainda se aplica, olhando o `App.vue` da nova tag. O build falha em `git apply --check` se não aplicar. Se a nova versão passar a carregar locales sozinha, o patch pode ser removido.
+5. Confira se o patch ainda se aplica, olhando o `packages/frontend/@n8n/i18n/src/index.ts` da nova tag. O build falha em `git apply --check` se não aplicar. Se a nova versão passar a carregar locales sozinha, o patch pode ser removido.
 6. Atualize `n8n-version.json` (versão, commit, digest), rode o workflow com `TRANSLATION_VERSION=test`, teste, e depois rode com `v1`.
 
 Nenhuma tradução é feita automaticamente: o `sync-locale` só escreve no `pt.json` com `--merge` ou `--prune`.

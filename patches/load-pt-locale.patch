@@ -1,35 +1,34 @@
-ENW PT-BR: carregar o locale "pt" em produção.
+ENW PT-BR: registrar o locale "pt" na criação da instância do vue-i18n.
 
-No n8n 2.1.1 o App.vue apenas chama setLanguage(); nenhum código de produção
-carrega um JSON de idioma além do inglês (o carregamento existe só no HMR de dev).
-Este patch importa explicitamente locales/pt.json e registra as mensagens com
-loadLanguage(), função já exportada pelo próprio @n8n/i18n.
+No n8n 2.1.1 nenhum código de produção carrega um JSON de idioma além do inglês
+(o carregamento existe só no HMR de dev) e vários rótulos são resolvidos com
+i18n.baseText() no topo dos módulos (ex.: descritores de Data tables, MCP, Chat),
+antes de qualquer troca de idioma.
 
-diff --git a/packages/frontend/editor-ui/src/app/App.vue b/packages/frontend/editor-ui/src/app/App.vue
---- a/packages/frontend/editor-ui/src/app/App.vue
-+++ b/packages/frontend/editor-ui/src/app/App.vue
-@@ -21,7 +21,9 @@
- import { useUsersStore } from '@/features/settings/users/users.store';
- import LoadingView from '@/app/views/LoadingView.vue';
- import { locale, N8nCommandBar } from '@n8n/design-system';
--import { setLanguage } from '@n8n/i18n';
-+import { loadLanguage, setLanguage } from '@n8n/i18n';
-+import type { LocaleMessages } from '@n8n/i18n';
-+import ptMessages from '@n8n/i18n/locales/pt.json';
- // Note: no need to import en.json here; default 'en' is handled via setLanguage
- import { useRootStore } from '@n8n/stores/useRootStore';
- import axios from 'axios';
-@@ -124,7 +126,12 @@
- watch(
- 	defaultLocale,
- 	async (newLocale) => {
--		setLanguage(newLocale);
-+		// ENW PT-BR: o n8n 2.1.1 não carrega locales além do inglês em produção
-+		if (newLocale === 'pt') {
-+			loadLanguage(newLocale, ptMessages as LocaleMessages);
-+		} else {
-+			setLanguage(newLocale);
-+		}
+Este patch importa explicitamente locales/pt.json, registra-o junto do inglês e
+usa "pt" como locale inicial. Depois disso o próprio App.vue continua chamando
+setLanguage(N8N_DEFAULT_LOCALE) normalmente; o fallback para inglês é mantido.
 
- 		axios.defaults.headers.common['Accept-Language'] = newLocale;
+diff --git a/packages/frontend/@n8n/i18n/src/index.ts b/packages/frontend/@n8n/i18n/src/index.ts
+--- a/packages/frontend/@n8n/i18n/src/index.ts
++++ b/packages/frontend/@n8n/i18n/src/index.ts
+@@ -4,6 +4,7 @@
+ import { createI18n } from 'vue-i18n';
+
+ import englishBaseText from './locales/en.json';
++import portugueseBaseText from './locales/pt.json';
+ import type { BaseTextKey, LocaleMessages, INodeTranslationHeaders } from './types';
+ import {
+ 	deriveMiddleKey,
+@@ -16,9 +17,9 @@
+
+ export const i18nInstance = createI18n({
+ 	legacy: false,
+-	locale: 'en',
++	locale: 'pt',
+ 	fallbackLocale: 'en',
+-	messages: { en: englishBaseText },
++	messages: { en: englishBaseText, pt: portugueseBaseText as typeof englishBaseText },
+ 	warnHtmlMessage: false,
+ });
 
